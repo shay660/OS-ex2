@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <math.h>
 
 #define READY 0
 #define RUNNING 1
@@ -213,7 +214,7 @@ int uthread_block(int tid) {
 
   if (tid == 0)
   {
-      printf("thread library error: blocking main thread\n");
+      printf("thread library error: blocking main thread.\n");
       return -1;
   }
 
@@ -228,6 +229,7 @@ int uthread_block(int tid) {
   }
 
   threads[tid]->state = BLOCKED;
+  threads[tid]->wake_up_time = INFINITY;
   return 0;
 }
 
@@ -279,3 +281,7 @@ int uthread_get_quantums(int tid) {
   return threads[tid]->n_quantum;
 }
 
+int main(){
+    printf("Hello");
+    return 0;
+}
