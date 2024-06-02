@@ -124,19 +124,30 @@ int uthread_init(int quantum_usecs) {
 }
 
 void scheduler() {
-    if (setitimer(ITIMER_VIRTUAL, &timer, NULL) < 0)
+  if (setitimer(ITIMER_VIRTUAL, &timer, NULL) < 0)
+  {
+    printf("system error: %s\n", strerror(errno));
+    exit(1);
+  }
+
+  // Check for threads to wake up
+  for (int i = 0; i < MAX_THREAD_NUM; i++)
+  {
+    if (threads[i] != NULL && threads[i]->state == BLOCKED && threads[i]->wake_up_time <= uthread_get_total_quantums())
     {
-      printf("system error: %s\n", strerror(errno));
-      exit(1);
+      threads[i]->state = READY;
+      g_queue_push_tail(ready_queue, threads[i]);
     }
-    // Set up the signal handler
-    struct sigaction sa = {0};
-    sa.sa_handler = run_next_thread;
-    if (sigaction(SIGVTALRM, &sa, NULL) < 0)
-    {
-      printf("system error: %s\n", strerror(errno));
-      exit(1);
-    }
+  }
+
+  // Set up the signal handler
+  struct sigaction sa = {0};
+  sa.sa_handler = run_next_thread;
+  if (sigaction(SIGVTALRM, &sa, NULL) < 0)
+  {
+    printf("system error: %s\n", strerror(errno));
+    exit(1);
+  }
 }
 
 int uthread_spawn(thread_entry_point entry_point) {
@@ -231,25 +242,26 @@ int uthread_resume(int tid) {
   return 0;
 }
 
-int uthread_sleep(int num_quantums) {
+int uthread_sleep(int num_quantums)
+{
   if (current_thread == 0)
   {
-      printf("thread library error: main thread called sleep\n");
-      return -1;
+    printf("system error: main thread called sleep\n");
+    exit(1);
   }
 
   Thread* thread = threads[current_thread];
-  if (thread->state == READY)
+  if (thread->state != RUNNING)
   {
-      g_queue_remove(ready_queue, threads[current_thread]);
+    printf("system error: thread is not running\n");
+    exit(1);
   }
+
   thread->state = BLOCKED;
   thread->wake_up_time = uthread_get_total_quantums() + num_quantums;
 
-  if (current_thread == thread->tid)
-  {
-    scheduler ();
-  }
+  scheduler();
+
   return 0;
 }
 
