@@ -4,6 +4,8 @@
 #include <glib.h>
 #include <setjmp.h>
 #include <stdbool.h>
+#include <signal.h>
+#include <sys/time.h>
 
 #define READY 0
 #define RUNNING 1
@@ -26,6 +28,7 @@ typedef struct Thread {
 } Thread;
 
 GQueue *ready_queue = NULL;
+
 Thread* threads[MAX_THREAD_NUM];
 int current_thread = -1;
 
@@ -51,37 +54,81 @@ bool is_valid_tid(int tid)
   return true;
 }
 
+// Signal handler for SIGVTALRM
+void timer_handler(int sig)
+{
+    if (g_queue_is_empty(ready_queue))
+    {
+        printf("thread library error: no ready threads\n");
+        exit(1);
+    }
+
+  // Save the current thread's context
+  if (sigsetjmp(threads[current_thread]->env, 1) == 0)
+  {
+    // Select the next thread to run
+    Thread* next_thread = g_queue_pop_head(ready_queue);
+    g_queue_push_tail(ready_queue, threads[current_thread]);
+    current_thread = next_thread->tid;
+    next_thread->state = RUNNING;
+    next_thread->n_quantum++;
+    // Restore the next thread's context
+    siglongjmp(next_thread->env, 1);
+  }
+}
+
 int uthread_init(int quantum_usecs) {
   ready_queue = g_queue_new();
-    if (ready_queue == NULL)
-    {
-        return -1;
-    }
-    for (int i = 0; i < MAX_THREAD_NUM; i++)
-    {
-        threads[i] = NULL;
-    }
-    Thread* main_thread = malloc(sizeof(Thread));
-    if (main_thread == NULL)
-    {
-        return -1;
-    }
-    main_thread->tid = 0;
-    main_thread->state = RUNNING;
-    main_thread->n_quantum = 1;
-    main_thread->entry_point = NULL;
-    sigsetjmp(main_thread->env, 1);
+  if (ready_queue == NULL)
+  {
+      return -1;
+  }
+  for (int i = 0; i < MAX_THREAD_NUM; i++)
+  {
+      threads[i] = NULL;
+  }
+  Thread* main_thread = malloc(sizeof(Thread));
+  if (main_thread == NULL)
+  {
+      return -1;
+  }
+  main_thread->tid = 0;
+  main_thread->state = RUNNING;
+  main_thread->n_quantum = 1;
+  main_thread->entry_point = NULL;  // TODO??
+  sigsetjmp(main_thread->env, 1);
 //    address_t sp = (address_t) main_thread->stack + STACK_SIZE - sizeof
 //        (address_t);
 //    address_t pc = (address_t) main_thread->entry_point;
 //    (main_thread->env->__jmpbuf)[JB_SP] = translate_address(sp);
 //    (main_thread->env->__jmpbuf)[JB_PC] = translate_address(pc);
 //    sigemptyset(&main_thread->env->__saved_mask);
-    threads[0] = main_thread;
-    current_thread = 0;
+  threads[0] = main_thread;
+  current_thread = 0;
 
+  // Set up the timer
+  struct itimerval timer;
+  timer.it_value.tv_sec = quantum_usecs / 1000000;
+  timer.it_value.tv_usec = quantum_usecs % 1000000;
+  timer.it_interval.tv_sec = quantum_usecs / 1000000;
+  timer.it_interval.tv_usec = quantum_usecs % 1000000;
+  if (setitimer(ITIMER_VIRTUAL, &timer, NULL) < 0)
+  {
+    perror("setitimer error");
+    return -1;
+  }
+
+  // Set up the signal handler
+  struct sigaction sa = {0};
+  sa.sa_handler = timer_handler;
+  if (sigaction(SIGVTALRM, &sa, NULL) < 0)
+  {
+    perror("sigaction");
+    return -1;
+  }
 
   return 0;
+
 }
 
 int uthread_spawn(thread_entry_point entry_point) {
@@ -116,31 +163,6 @@ int uthread_spawn(thread_entry_point entry_point) {
     }
   }
   return -1;
-}
-
-
-void running_next_thread()
-{
-  if (g_queue_is_empty(ready_queue))
-  {
-    printf("thread library error: no ready threads\n");
-    exit(1);
-  }
-
-  Thread* next_thread = g_queue_pop_head(ready_queue);
-  g_queue_push_tail(ready_queue, threads[current_thread]);
-  current_thread = next_thread->tid;
-  next_thread->state = RUNNING;
-  next_thread->n_quantum++;
-  siglongjmp(next_thread->env, 1);
-}
-
-void switch_out_current_thread()
-{
-  if (sigsetjmp(threads[current_thread]->env, 1) == 0)
-  {
-    running_next_thread();
-  }
 }
 
 int uthread_terminate(int tid) {
@@ -213,7 +235,7 @@ int uthread_sleep(int num_quantums) {
 
   if (current_thread == thread->tid)
   {
-    switch_out_current_thread();
+    scheduler ();
   }
   return 0;
 }
