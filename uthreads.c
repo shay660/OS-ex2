@@ -31,6 +31,9 @@ GQueue *ready_queue = NULL;
 
 Thread* threads[MAX_THREAD_NUM];
 int current_thread = -1;
+struct itimerval timer;
+
+void scheduler();
 
 /* A translation is required when using an address of a variable.
    Use this as a black box in your code. */
@@ -55,7 +58,7 @@ bool is_valid_tid(int tid)
 }
 
 // Signal handler for SIGVTALRM
-void timer_handler(int sig)
+void run_next_thread(int sig)
 {
     if (g_queue_is_empty(ready_queue))
     {
@@ -81,7 +84,8 @@ int uthread_init(int quantum_usecs) {
   ready_queue = g_queue_new();
   if (ready_queue == NULL)
   {
-      return -1;
+    printf("system error: %s\n", strerror(errno));
+    exit(1);
   }
   for (int i = 0; i < MAX_THREAD_NUM; i++)
   {
@@ -90,8 +94,10 @@ int uthread_init(int quantum_usecs) {
   Thread* main_thread = malloc(sizeof(Thread));
   if (main_thread == NULL)
   {
-      return -1;
+    printf("system error: %s\n", strerror(errno));
+    exit(1);
   }
+
   main_thread->tid = 0;
   main_thread->state = RUNNING;
   main_thread->n_quantum = 1;
@@ -107,28 +113,30 @@ int uthread_init(int quantum_usecs) {
   current_thread = 0;
 
   // Set up the timer
-  struct itimerval timer;
-  timer.it_value.tv_sec = quantum_usecs / 1000000;
-  timer.it_value.tv_usec = quantum_usecs % 1000000;
-  timer.it_interval.tv_sec = quantum_usecs / 1000000;
-  timer.it_interval.tv_usec = quantum_usecs % 1000000;
-  if (setitimer(ITIMER_VIRTUAL, &timer, NULL) < 0)
-  {
-    perror("setitimer error");
-    return -1;
-  }
+    timer.it_value.tv_sec = quantum_usecs / 1000000;
+    timer.it_value.tv_usec = quantum_usecs % 1000000;
+    timer.it_interval.tv_sec = quantum_usecs / 1000000;
+    timer.it_interval.tv_usec = quantum_usecs % 1000000;
+    scheduler();
 
-  // Set up the signal handler
-  struct sigaction sa = {0};
-  sa.sa_handler = timer_handler;
-  if (sigaction(SIGVTALRM, &sa, NULL) < 0)
-  {
-    perror("sigaction");
-    return -1;
-  }
+    return 0;
 
-  return 0;
+}
 
+void scheduler() {
+    if (setitimer(ITIMER_VIRTUAL, &timer, NULL) < 0)
+    {
+      printf("system error: %s\n", strerror(errno));
+      exit(1);
+    }
+    // Set up the signal handler
+    struct sigaction sa = {0};
+    sa.sa_handler = run_next_thread;
+    if (sigaction(SIGVTALRM, &sa, NULL) < 0)
+    {
+      printf("system error: %s\n", strerror(errno));
+      exit(1);
+    }
 }
 
 int uthread_spawn(thread_entry_point entry_point) {
@@ -144,8 +152,10 @@ int uthread_spawn(thread_entry_point entry_point) {
       Thread* new_thread = malloc(sizeof(Thread));
       if (new_thread == NULL)
       {
-        return -1;
+        printf("system error: %s\n", strerror(errno));
+        exit(1);
       }
+
       new_thread->tid = i;
       new_thread->state = READY;
       new_thread->n_quantum = 0;
@@ -165,6 +175,7 @@ int uthread_spawn(thread_entry_point entry_point) {
   return -1;
 }
 
+
 int uthread_terminate(int tid) {
   if (!is_valid_tid(tid)) return -1;
   if (tid == 0)
@@ -173,7 +184,7 @@ int uthread_terminate(int tid) {
   }
   if (threads[tid]->state == RUNNING)
   {
-    running_next_thread();
+      scheduler();
   }
 
   if (threads[tid]->state == READY)
@@ -197,7 +208,7 @@ int uthread_block(int tid) {
 
   if (threads[tid]->state == RUNNING)
   {
-    running_next_thread();
+    scheduler();  //
   }
 
   if (threads[tid]->state == READY)
@@ -206,12 +217,14 @@ int uthread_block(int tid) {
   }
 
   threads[tid]->state = BLOCKED;
-  sigsetjmp(threads[tid]->env, 1);
   return 0;
 }
 
 int uthread_resume(int tid) {
-  if (!is_valid_tid(tid)) return -1;
+  if (!is_valid_tid(tid)) {
+      printf("thread library error: Invalid input. \n");
+      return -1;
+  }
 
   threads[tid]->state = READY;
   g_queue_push_tail(ready_queue, threads[tid]);
