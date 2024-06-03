@@ -19,7 +19,7 @@ typedef unsigned long address_t;
 #define JB_SP 6
 #define JB_PC 7
 
-int TOTAL_QUANTUMS = 0;
+int TOTAL_QUANTUMS = 1; // TODO - increase to one (from zero) is it ok?
 
 typedef struct Thread {
     int tid;
@@ -62,34 +62,39 @@ bool is_valid_tid (int tid)
   return true;
 }
 
+void select_and_run_next_thread ()
+{
+  Thread *next_thread = ready_queue.front ();
+  ready_queue.pop ();
+  current_thread = next_thread->tid;
+  next_thread->state = RUNNING;
+  next_thread->n_quantum++;
+  // Restore the next thread's context
+  siglongjmp (next_thread->env, 1);
+}
 // Signal handler for SIGVTALRM
 void run_next_thread (int sig)
 {
-//  if (!ready_queue.empty ())
-//    {
-//      printf ("thread library error: no ready threads\n");
-//      exit (1);
-
-
   // Save the current thread's context
-  if (sigsetjmp(threads[current_thread]->env, 1) == 0)
+  TOTAL_QUANTUMS++; // TODO add this to here
+  if (threads[current_thread]) // TODO add this condition
     {
-      // Select the next thread to run
-      if (threads[current_thread] != nullptr)
+      if (sigsetjmp(threads[current_thread]->env, 1) == 0)
         {
-          ready_queue.push (threads[current_thread]);
+          // Select the next thread to run
+          ready_queue.push (threads[current_thread]); // TODO check this.
           threads[current_thread]->state = READY;
+          select_and_run_next_thread();
         }
-      Thread *next_thread = ready_queue.front ();
-      ready_queue.pop ();
-      current_thread = next_thread->tid;
-      next_thread->state = RUNNING;
-      next_thread->n_quantum++;
-      // Restore the next thread's context
-      siglongjmp (next_thread->env, 1);
     }
-//    }
+  else
+    {
+      select_and_run_next_thread ();
+    }
 }
+
+
+
 
 int uthread_init (int quantum_usecs)
 {
@@ -162,7 +167,6 @@ void scheduler ()
       printf ("system error: sigaction failed. \n");
       exit (1);
     }
-  TOTAL_QUANTUMS++;
 }
 
 int uthread_spawn (thread_entry_point entry_point)
@@ -203,17 +207,23 @@ int uthread_spawn (thread_entry_point entry_point)
   return -1;
 }
 
-int uthread_terminate (int tid)
+int uthread_terminate (int tid) // TODO review this function
 {
   if (!is_valid_tid (tid)) return -1;
   if (tid == 0)
     {
+      free (threads[0]);
+      threads[0] = nullptr;
       exit (0);
     }
 
   if (threads[tid]->state == RUNNING)
     {
+      free (threads[tid]);
+      threads[tid] = nullptr;
       scheduler ();
+      run_next_thread (0);
+      return 0;
     }
 
   if (threads[tid]->state == READY)
@@ -224,6 +234,7 @@ int uthread_terminate (int tid)
   threads[tid] = nullptr;
   return 0;
 }
+
 void remove_from_queue (int tid)
 {
   std::queue<Thread *> tempQueue;
