@@ -65,25 +65,30 @@ bool is_valid_tid (int tid)
 // Signal handler for SIGVTALRM
 void run_next_thread (int sig)
 {
-  if (ready_queue.empty ())
-    {
-      printf ("thread library error: no ready threads\n");
-      exit (1);
-    }
+//  if (!ready_queue.empty ())
+//    {
+//      printf ("thread library error: no ready threads\n");
+//      exit (1);
+
 
   // Save the current thread's context
   if (sigsetjmp(threads[current_thread]->env, 1) == 0)
     {
       // Select the next thread to run
+      if (threads[current_thread] != nullptr)
+        {
+          ready_queue.push (threads[current_thread]);
+          threads[current_thread]->state = READY;
+        }
       Thread *next_thread = ready_queue.front ();
       ready_queue.pop ();
-      ready_queue.push (threads[current_thread]);
       current_thread = next_thread->tid;
       next_thread->state = RUNNING;
       next_thread->n_quantum++;
       // Restore the next thread's context
       siglongjmp (next_thread->env, 1);
     }
+//    }
 }
 
 int uthread_init (int quantum_usecs)
@@ -157,6 +162,7 @@ void scheduler ()
       printf ("system error: sigaction failed. \n");
       exit (1);
     }
+  TOTAL_QUANTUMS++;
 }
 
 int uthread_spawn (thread_entry_point entry_point)
@@ -204,6 +210,7 @@ int uthread_terminate (int tid)
     {
       exit (0);
     }
+
   if (threads[tid]->state == RUNNING)
     {
       scheduler ();
@@ -213,7 +220,6 @@ int uthread_terminate (int tid)
     {
       remove_from_queue (tid);
     }
-
   free (threads[tid]);
   threads[tid] = nullptr;
   return 0;
@@ -246,7 +252,7 @@ int uthread_block (int tid)
 
   if (threads[tid]->state == RUNNING)
     {
-      scheduler ();  //
+      scheduler ();
     }
 
   if (threads[tid]->state == READY)

@@ -13,6 +13,7 @@ set(CMAKE_CXX_STANDARD 11)
 
 add_executable(OS_ex2
         uthreads.cpp
+        test0_sanity.cpp
         uthreads.h)
 
 # Link against GLib
