@@ -197,6 +197,7 @@ int uthread_terminate(int tid) {
   if (threads[tid]->state == RUNNING)
   {
       scheduler();
+
   }
 
   if (threads[tid]->state == READY)
