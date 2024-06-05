@@ -1,7 +1,6 @@
 #include "uthreads.h"
 #include <stdlib.h>
 #include <stdio.h>
-//#include <glib.h>
 #include <setjmp.h>
 #include <stdbool.h>
 #include <signal.h>
@@ -14,6 +13,10 @@
 #define READY 0
 #define RUNNING 1
 #define BLOCKED 2
+#define MILLION 1000000
+#define FAILURE (-1)
+#define SUCCESS 0
+
 
 typedef unsigned long address_t;
 #define JB_SP 6
@@ -36,6 +39,8 @@ std::queue<Thread *> ready_queue;
 Thread *threads[MAX_THREAD_NUM];
 int current_thread = -1;
 struct itimerval timer;
+sigset_t masked;  // TODO - check if it is ok to use this variable
+
 
 void scheduler ();
 
@@ -98,12 +103,12 @@ void run_next_thread (int sig)
 
 int uthread_init (int quantum_usecs)
 {
-//  ready_queue = g_queue_new();
-//  if (ready_queue == NULL)
-//  {
-//    printf("system error: %s\n", strerror(errno));
-//    exit(1);
-//  }
+  if (quantum_usecs <= 0)
+    {
+      printf ("thread library error: invalid quantum\n");
+      return -1;
+    }
+
   for (auto &thread: threads)
     {
       thread = nullptr;
@@ -112,7 +117,7 @@ int uthread_init (int quantum_usecs)
   if (main_thread == nullptr)
     {
       printf ("system error: failed to allocate memory. \n");
-      exit (1);
+      EXIT_FAILURE;
     }
 
   main_thread->tid = 0;
@@ -130,32 +135,38 @@ int uthread_init (int quantum_usecs)
   current_thread = 0;
 
   // Set up the timer
-  timer.it_value.tv_sec = quantum_usecs / 1000000;
-  timer.it_value.tv_usec = quantum_usecs % 1000000;
-  timer.it_interval.tv_sec = quantum_usecs / 1000000;
-  timer.it_interval.tv_usec = quantum_usecs % 1000000;
+  timer.it_value.tv_sec = quantum_usecs / MILLION;
+  timer.it_value.tv_usec = quantum_usecs % MILLION;
+  timer.it_interval.tv_sec = quantum_usecs / MILLION;
+  timer.it_interval.tv_usec = quantum_usecs % MILLION;
+
+  // Create a sigset_t and add SIGVTALRM to it
+  sigemptyset(&masked);
+  sigaddset(&masked, SIGVTALRM);
+
   scheduler ();
 
-  return 0;
-
+  return SUCCESS;
 }
 
 void scheduler ()
 {
+  // Block signals
+  sigprocmask (SIG_BLOCK, &masked, nullptr);
   if (setitimer (ITIMER_VIRTUAL, &timer, nullptr) < 0)
     {
       printf ("system error: set timer failed.\n");
-      exit (1);
+      EXIT_FAILURE;
     }
 
   // Check for threads to wake up
-  for (int i = 0; i < MAX_THREAD_NUM; i++)
+  for (auto & thread : threads)
     {
-      if (threads[i] != nullptr && threads[i]->state == BLOCKED
-          && threads[i]->wake_up_time <= uthread_get_total_quantums ())
+      if (thread != nullptr && thread->state == BLOCKED
+          && thread->wake_up_time <= (float) uthread_get_total_quantums())
         {
-          threads[i]->state = READY;
-          ready_queue.push (threads[i]);
+          thread->state = READY;
+          ready_queue.push (thread);
         }
     }
 
@@ -165,27 +176,35 @@ void scheduler ()
   if (sigaction (SIGVTALRM, &sa, nullptr) < 0)
     {
       printf ("system error: sigaction failed. \n");
-      exit (1);
+      EXIT_FAILURE;
     }
+
+  // Unblock signals
+  sigprocmask (SIG_UNBLOCK, &masked, nullptr);
+
 }
 
 int uthread_spawn (thread_entry_point entry_point)
 {
-  if (entry_point == NULL)
+  // Block signals
+  sigprocmask (SIG_BLOCK, &masked, nullptr);
+  if (entry_point == nullptr)
     {
       printf ("thread library error: null entry point\n");
-      return -1;
+      // Unblock signals before returning
+      sigprocmask (SIG_UNBLOCK, &masked, nullptr);
+      return FAILURE;
     }
 
   for (int i = 0; i < MAX_THREAD_NUM; i++)
     {
-      if (threads[i] == NULL)
+      if (threads[i] == nullptr)
         {
           Thread *new_thread = static_cast<Thread *>(malloc (sizeof (Thread)));
           if (new_thread == nullptr)
             {
               printf ("system error: memory allocation failed. \n");
-              exit (1);
+              EXIT_FAILURE;
             }
 
           new_thread->tid = i;
@@ -201,10 +220,16 @@ int uthread_spawn (thread_entry_point entry_point)
           sigemptyset (&new_thread->env->__saved_mask);
           threads[i] = new_thread;
           ready_queue.push (new_thread);
+
+          // Unblock signals before returning
+          sigprocmask (SIG_UNBLOCK, &masked, nullptr);
           return i;
         }
-    }
-  return -1;
+  }
+  
+  // Unblock signals before returning
+  sigprocmask (SIG_UNBLOCK, &masked, nullptr);
+  return FAILURE;
 }
 
 int uthread_terminate (int tid) // TODO review this function
@@ -214,7 +239,7 @@ int uthread_terminate (int tid) // TODO review this function
     {
       free (threads[0]);
       threads[0] = nullptr;
-      exit (0);
+      EXIT_SUCCESS;
     }
 
   if (threads[tid]->state == RUNNING)
@@ -223,8 +248,9 @@ int uthread_terminate (int tid) // TODO review this function
       threads[tid] = nullptr;
       scheduler ();
       run_next_thread (0);
-      return 0;
-    }
+
+      return SUCCESS;
+  }
 
   if (threads[tid]->state == READY)
     {
@@ -232,7 +258,8 @@ int uthread_terminate (int tid) // TODO review this function
     }
   free (threads[tid]);
   threads[tid] = nullptr;
-  return 0;
+  return SUCCESS;
+
 }
 
 void remove_from_queue (int tid)
@@ -258,7 +285,7 @@ int uthread_block (int tid)
   if (tid == 0)
     {
       printf ("thread library error: blocking main thread.\n");
-      return -1;
+      return FAILURE;
     }
 
   if (threads[tid]->state == RUNNING)
@@ -273,7 +300,7 @@ int uthread_block (int tid)
 
   threads[tid]->state = BLOCKED;
   threads[tid]->wake_up_time = INFINITY;
-  return 0;
+  return SUCCESS;
 }
 
 int uthread_resume (int tid)
@@ -281,12 +308,12 @@ int uthread_resume (int tid)
   if (!is_valid_tid (tid))
     {
       printf ("thread library error: Invalid input. \n");
-      return -1;
+      return FAILURE;
     }
 
   threads[tid]->state = READY;
   ready_queue.push (threads[tid]);
-  return 0;
+  return SUCCESS;
 }
 
 int uthread_sleep (int num_quantums)
@@ -294,14 +321,14 @@ int uthread_sleep (int num_quantums)
   if (current_thread == 0)
     {
       printf ("system error: main thread called sleep\n");
-      exit (1);
+      EXIT_FAILURE;
     }
 
   Thread *thread = threads[current_thread];
   if (thread->state != RUNNING)
     {
       printf ("system error: thread is not running\n");
-      exit (1);
+      EXIT_FAILURE;
     }
 
   thread->state = BLOCKED;
@@ -309,7 +336,7 @@ int uthread_sleep (int num_quantums)
 
   scheduler ();
 
-  return 0;
+  return SUCCESS;
 }
 
 int uthread_get_tid ()
