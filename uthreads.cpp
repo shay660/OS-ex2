@@ -1,8 +1,8 @@
 #include "uthreads.h"
-#include <stdlib.h>
-#include <stdio.h>
+//#include <stdlib.h>
+//#include <stdio.h>
 #include <setjmp.h>
-#include <stdbool.h>
+//#include <stdbool.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <math.h>
@@ -28,7 +28,7 @@ typedef struct Thread {
     int tid;
     int state;
     int n_quantum;
-    float wake_up_time;
+    int wake_up_time;
     thread_entry_point entry_point;
     char stack[STACK_SIZE];
     sigjmp_buf env;
@@ -45,6 +45,7 @@ sigset_t masked;  // TODO - check if it is ok to use this variable
 void scheduler ();
 
 void remove_from_queue (int tid);
+void free_all_threads ();
 /* A translation is required when using an address of a variable.
    Use this as a black box in your code. */
 address_t translate_address (address_t addr)
@@ -81,7 +82,7 @@ void select_and_run_next_thread ()
 void run_next_thread (int sig)
 {
   // Save the current thread's context
-  TOTAL_QUANTUMS++; // TODO add this to here
+  TOTAL_QUANTUMS++;
   if (threads[current_thread]) // TODO add this condition
     {
       if (sigsetjmp(threads[current_thread]->env, 1) == 0)
@@ -237,9 +238,8 @@ int uthread_terminate (int tid) // TODO review this function
   if (!is_valid_tid (tid)) return -1;
   if (tid == 0)
     {
-      free (threads[0]);
-      threads[0] = nullptr;
-      EXIT_SUCCESS;
+      free_all_threads();
+      exit (0);
     }
 
   if (threads[tid]->state == RUNNING)
@@ -260,6 +260,15 @@ int uthread_terminate (int tid) // TODO review this function
   threads[tid] = nullptr;
   return SUCCESS;
 
+}
+void free_all_threads ()
+{
+  for (int i = 0; i < MAX_THREAD_NUM; i++) {
+    if (threads[i] != nullptr) {
+      free(threads[i]);
+      threads[i] = nullptr;
+    }
+  }
 }
 
 void remove_from_queue (int tid)
