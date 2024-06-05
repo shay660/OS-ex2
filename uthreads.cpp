@@ -17,6 +17,7 @@
 #define FAILURE (-1)
 #define SUCCESS 0
 
+
 typedef unsigned long address_t;
 #define JB_SP 6
 #define JB_PC 7
@@ -39,6 +40,7 @@ Thread *threads[MAX_THREAD_NUM];
 int current_thread = -1;
 struct itimerval timer;
 sigset_t masked;  // TODO - check if it is ok to use this variable
+
 
 void scheduler ();
 
@@ -106,6 +108,7 @@ int uthread_init (int quantum_usecs)
       printf ("thread library error: invalid quantum\n");
       return -1;
     }
+
   for (auto &thread: threads)
     {
       thread = nullptr;
@@ -178,6 +181,7 @@ void scheduler ()
 
   // Unblock signals
   sigprocmask (SIG_UNBLOCK, &masked, nullptr);
+
 }
 
 int uthread_spawn (thread_entry_point entry_point)
@@ -221,7 +225,8 @@ int uthread_spawn (thread_entry_point entry_point)
           sigprocmask (SIG_UNBLOCK, &masked, nullptr);
           return i;
         }
-    }
+  }
+  
   // Unblock signals before returning
   sigprocmask (SIG_UNBLOCK, &masked, nullptr);
   return FAILURE;
@@ -243,8 +248,9 @@ int uthread_terminate (int tid) // TODO review this function
       threads[tid] = nullptr;
       scheduler ();
       run_next_thread (0);
+
       return SUCCESS;
-    }
+  }
 
   if (threads[tid]->state == READY)
     {
@@ -253,6 +259,7 @@ int uthread_terminate (int tid) // TODO review this function
   free (threads[tid]);
   threads[tid] = nullptr;
   return SUCCESS;
+
 }
 
 void remove_from_queue (int tid)
