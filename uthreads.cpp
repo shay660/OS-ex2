@@ -17,7 +17,6 @@
 #define FAILURE (-1)
 #define SUCCESS 0
 
-
 typedef unsigned long address_t;
 #define JB_SP 6
 #define JB_PC 7
@@ -28,7 +27,7 @@ typedef struct Thread {
     int tid;
     int state;
     int n_quantum;
-    int wake_up_time;
+    float wake_up_time;
     thread_entry_point entry_point;
     char stack[STACK_SIZE];
     sigjmp_buf env;
@@ -90,7 +89,7 @@ void run_next_thread (int sig)
           // Select the next thread to run
           ready_queue.push (threads[current_thread]); // TODO check this.
           threads[current_thread]->state = READY;
-          select_and_run_next_thread();
+          select_and_run_next_thread ();
         }
     }
   else
@@ -98,9 +97,6 @@ void run_next_thread (int sig)
       select_and_run_next_thread ();
     }
 }
-
-
-
 
 int uthread_init (int quantum_usecs)
 {
@@ -142,8 +138,8 @@ int uthread_init (int quantum_usecs)
   timer.it_interval.tv_usec = quantum_usecs % MILLION;
 
   // Create a sigset_t and add SIGVTALRM to it
-  sigemptyset(&masked);
-  sigaddset(&masked, SIGVTALRM);
+  sigemptyset (&masked);
+  sigaddset (&masked, SIGVTALRM);
 
   scheduler ();
 
@@ -161,10 +157,10 @@ void scheduler ()
     }
 
   // Check for threads to wake up
-  for (auto & thread : threads)
+  for (auto &thread: threads)
     {
       if (thread != nullptr && thread->state == BLOCKED
-          && thread->wake_up_time <= (float) uthread_get_total_quantums())
+          && thread->wake_up_time <= (float) uthread_get_total_quantums ())
         {
           thread->state = READY;
           ready_queue.push (thread);
@@ -202,6 +198,7 @@ int uthread_spawn (thread_entry_point entry_point)
       if (threads[i] == nullptr)
         {
           Thread *new_thread = static_cast<Thread *>(malloc (sizeof (Thread)));
+
           if (new_thread == nullptr)
             {
               printf ("system error: memory allocation failed. \n");
@@ -226,8 +223,8 @@ int uthread_spawn (thread_entry_point entry_point)
           sigprocmask (SIG_UNBLOCK, &masked, nullptr);
           return i;
         }
-  }
-  
+    }
+
   // Unblock signals before returning
   sigprocmask (SIG_UNBLOCK, &masked, nullptr);
   return FAILURE;
