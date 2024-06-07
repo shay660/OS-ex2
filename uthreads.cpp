@@ -9,6 +9,7 @@
 #include "queue"
 #include <cstdio>
 #include <cerrno>
+#include <iostream>
 
 #define READY 0
 #define RUNNING 1
@@ -16,19 +17,21 @@
 #define MILLION 1000000
 #define FAILURE (-1)
 #define SUCCESS 0
+#define MAIN_THREAD 0
+
 
 typedef unsigned long address_t;
 #define JB_SP 6
 #define JB_PC 7
 
-int TOTAL_QUANTUMS = 1; // TODO - increase to one (from zero) is it ok?
+
+int TOTAL_QUANTUMS = 0;
 
 typedef struct Thread {
     int tid;
     int state;
     int n_quantum;
     float wake_up_time;
-    thread_entry_point entry_point;
     char stack[STACK_SIZE];
     sigjmp_buf env;
 } Thread;
@@ -38,7 +41,7 @@ std::queue<Thread *> ready_queue;
 Thread *threads[MAX_THREAD_NUM];
 int current_thread = -1;
 struct itimerval timer;
-sigset_t masked;  // TODO - check if it is ok to use this variable
+sigset_t masked;
 
 
 void scheduler ();
@@ -61,7 +64,7 @@ bool is_valid_tid (int tid)
 {
   if (tid < 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr)
     {
-      printf ("thread library error: invalid tid\n");
+      std::cerr <<  "thread library error: invalid tid\n";
       return false;
     }
   return true;
@@ -77,18 +80,32 @@ void select_and_run_next_thread ()
   // Restore the next thread's context
   siglongjmp (next_thread->env, 1);
 }
+
 // Signal handler for SIGVTALRM
 void run_next_thread (int sig)
 {
   // Save the current thread's context
   TOTAL_QUANTUMS++;
-  if (threads[current_thread]) // TODO add this condition
+  // Check for threads to wake up
+  for (auto &thread: threads)
+    {
+      if (thread != nullptr && thread->state == BLOCKED
+          && thread->wake_up_time <= (float) uthread_get_total_quantums ())
+        {
+          thread->state = READY;
+          ready_queue.push (thread);
+        }
+    }
+
+  if (threads[current_thread])
     {
       if (sigsetjmp(threads[current_thread]->env, 1) == 0)
         {
-          // Select the next thread to run
-          ready_queue.push (threads[current_thread]); // TODO check this.
-          threads[current_thread]->state = READY;
+          if (threads[current_thread]->state != BLOCKED)
+            {
+              ready_queue.push (threads[current_thread]);
+              threads[current_thread]->state = READY;
+            }
           select_and_run_next_thread ();
         }
     }
@@ -102,8 +119,8 @@ int uthread_init (int quantum_usecs)
 {
   if (quantum_usecs <= 0)
     {
-      printf ("thread library error: invalid quantum\n");
-      return -1;
+      std::cerr << "thread library error: invalid quantum\n";
+      return FAILURE;
     }
 
   for (auto &thread: threads)
@@ -113,23 +130,16 @@ int uthread_init (int quantum_usecs)
   Thread *main_thread = static_cast<Thread *>(malloc (sizeof (Thread)));
   if (main_thread == nullptr)
     {
-      printf ("system error: failed to allocate memory. \n");
-      EXIT_FAILURE;
+      std::cerr << "system error: failed to allocate memory. \n";
+      return FAILURE;
     }
 
-  main_thread->tid = 0;
+  main_thread->tid = MAIN_THREAD;
   main_thread->state = RUNNING;
-  main_thread->n_quantum = 1;
-  main_thread->entry_point = nullptr;  // TODO??
+  main_thread->n_quantum = 0;
   sigsetjmp(main_thread->env, 1);
-//    address_t sp = (address_t) main_thread->stack + STACK_SIZE - sizeof
-//        (address_t);
-//    address_t pc = (address_t) main_thread->entry_point;
-//    (main_thread->env->__jmpbuf)[JB_SP] = translate_address(sp);
-//    (main_thread->env->__jmpbuf)[JB_PC] = translate_address(pc);
-//    sigemptyset(&main_thread->env->__saved_mask);
-  threads[0] = main_thread;
-  current_thread = 0;
+  threads[MAIN_THREAD] = main_thread;
+  current_thread = MAIN_THREAD;
 
   // Set up the timer
   timer.it_value.tv_sec = quantum_usecs / MILLION;
@@ -152,19 +162,8 @@ void scheduler ()
   sigprocmask (SIG_BLOCK, &masked, nullptr);
   if (setitimer (ITIMER_VIRTUAL, &timer, nullptr) < 0)
     {
-      printf ("system error: set timer failed.\n");
+      std::cerr << "system error: set timer failed.\n";
       EXIT_FAILURE;
-    }
-
-  // Check for threads to wake up
-  for (auto &thread: threads)
-    {
-      if (thread != nullptr && thread->state == BLOCKED
-          && thread->wake_up_time <= (float) uthread_get_total_quantums ())
-        {
-          thread->state = READY;
-          ready_queue.push (thread);
-        }
     }
 
   // Set up the signal handler
@@ -172,13 +171,13 @@ void scheduler ()
   sa.sa_handler = run_next_thread;
   if (sigaction (SIGVTALRM, &sa, nullptr) < 0)
     {
-      printf ("system error: sigaction failed. \n");
+      std::cerr << "system error: sigaction failed. \n";
       EXIT_FAILURE;
     }
 
   // Unblock signals
   sigprocmask (SIG_UNBLOCK, &masked, nullptr);
-
+  run_next_thread (SIGALRM);
 }
 
 int uthread_spawn (thread_entry_point entry_point)
@@ -187,7 +186,7 @@ int uthread_spawn (thread_entry_point entry_point)
   sigprocmask (SIG_BLOCK, &masked, nullptr);
   if (entry_point == nullptr)
     {
-      printf ("thread library error: null entry point\n");
+      std::cerr << "thread library error: null entry point\n";
       // Unblock signals before returning
       sigprocmask (SIG_UNBLOCK, &masked, nullptr);
       return FAILURE;
@@ -201,14 +200,13 @@ int uthread_spawn (thread_entry_point entry_point)
 
           if (new_thread == nullptr)
             {
-              printf ("system error: memory allocation failed. \n");
-              EXIT_FAILURE;
+              std::cerr << "system error: memory allocation failed. \n";
+              exit(1);
             }
 
           new_thread->tid = i;
           new_thread->state = READY;
           new_thread->n_quantum = 0;
-          new_thread->entry_point = entry_point;
           sigsetjmp(new_thread->env, 1);
           address_t sp = (address_t) new_thread->stack + STACK_SIZE - sizeof
               (address_t);
@@ -225,18 +223,19 @@ int uthread_spawn (thread_entry_point entry_point)
         }
     }
 
+    std::cerr << "thread library error: Too many threads. \n";
   // Unblock signals before returning
   sigprocmask (SIG_UNBLOCK, &masked, nullptr);
   return FAILURE;
 }
 
-int uthread_terminate (int tid) // TODO review this function
+int uthread_terminate (int tid)
 {
-  if (!is_valid_tid (tid)) return -1;
-  if (tid == 0)
+  if (!is_valid_tid (tid)) return FAILURE;
+  if (tid == MAIN_THREAD)
     {
-      free_all_threads();
-      exit (0);
+      free_all_threads ();
+      exit (SUCCESS);
     }
 
   if (threads[tid]->state == RUNNING)
@@ -244,10 +243,9 @@ int uthread_terminate (int tid) // TODO review this function
       free (threads[tid]);
       threads[tid] = nullptr;
       scheduler ();
-      run_next_thread (0);
 
       return SUCCESS;
-  }
+    }
 
   if (threads[tid]->state == READY)
     {
@@ -256,16 +254,18 @@ int uthread_terminate (int tid) // TODO review this function
   free (threads[tid]);
   threads[tid] = nullptr;
   return SUCCESS;
-
 }
+
 void free_all_threads ()
 {
-  for (int i = 0; i < MAX_THREAD_NUM; i++) {
-    if (threads[i] != nullptr) {
-      free(threads[i]);
-      threads[i] = nullptr;
+  for (int i = 0; i < MAX_THREAD_NUM; i++)
+    {
+      if (threads[i] != nullptr)
+        {
+          free (threads[i]);
+          threads[i] = nullptr;
+        }
     }
-  }
 }
 
 void remove_from_queue (int tid)
@@ -278,7 +278,6 @@ void remove_from_queue (int tid)
         {
           tempQueue.push (ready_queue.front ());
         }
-      free (thread);
       ready_queue.pop ();
     }
   ready_queue = tempQueue;
@@ -286,11 +285,11 @@ void remove_from_queue (int tid)
 
 int uthread_block (int tid)
 {
-  if (!is_valid_tid (tid)) return -1;
+  if (!is_valid_tid (tid)) return FAILURE;
 
-  if (tid == 0)
+  if (tid == MAIN_THREAD)
     {
-      printf ("thread library error: blocking main thread.\n");
+      std::cerr << "thread library error: blocking main thread.\n";
       return FAILURE;
     }
 
@@ -313,7 +312,7 @@ int uthread_resume (int tid)
 {
   if (!is_valid_tid (tid))
     {
-      printf ("thread library error: Invalid input. \n");
+      std::cerr << "thread library error: Invalid input. \n";
       return FAILURE;
     }
 
@@ -324,24 +323,23 @@ int uthread_resume (int tid)
 
 int uthread_sleep (int num_quantums)
 {
-  if (current_thread == 0)
+  if (current_thread == MAIN_THREAD)
     {
-      printf ("system error: main thread called sleep\n");
-      EXIT_FAILURE;
+      std::cerr << "thread library error: main thread called sleep.\n";
+      return FAILURE;
     }
 
   Thread *thread = threads[current_thread];
   if (thread->state != RUNNING)
     {
-      printf ("system error: thread is not running\n");
-      EXIT_FAILURE;
+      std::cerr << "thread library error: thread is not running.\n";
+      return FAILURE;
     }
 
   thread->state = BLOCKED;
   thread->wake_up_time = uthread_get_total_quantums () + num_quantums;
 
   scheduler ();
-
   return SUCCESS;
 }
 
@@ -357,7 +355,7 @@ int uthread_get_total_quantums ()
 
 int uthread_get_quantums (int tid)
 {
-  if (!is_valid_tid (tid)) return -1;
+  if (!is_valid_tid (tid)) return FAILURE;
 
   return threads[tid]->n_quantum;
 }
