@@ -19,7 +19,6 @@
 #define SUCCESS 0
 #define MAIN_THREAD 0
 
-
 typedef unsigned long address_t;
 #define JB_SP 6
 #define JB_PC 7
@@ -152,7 +151,6 @@ int uthread_init (int quantum_usecs)
   sigaddset (&masked, SIGVTALRM);
 
   scheduler ();
-
   return SUCCESS;
 }
 
@@ -163,7 +161,7 @@ void scheduler ()
   if (setitimer (ITIMER_VIRTUAL, &timer, nullptr) < 0)
     {
       std::cerr << "system error: set timer failed.\n";
-      EXIT_FAILURE;
+      return;
     }
 
   // Set up the signal handler
@@ -172,7 +170,7 @@ void scheduler ()
   if (sigaction (SIGVTALRM, &sa, nullptr) < 0)
     {
       std::cerr << "system error: sigaction failed. \n";
-      EXIT_FAILURE;
+      return;
     }
 
   // Unblock signals
